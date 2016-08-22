@@ -21,6 +21,7 @@
 #define __GST_APPLE_CORE_VIDEO_MEMORY_H__
 
 #include <gst/gst.h>
+#include <gst/gl/gl.h>
 
 #include "CoreVideo/CoreVideo.h"
 
@@ -63,13 +64,6 @@ typedef struct
 } GstAppleCoreVideoPixelBuffer;
 
 /**
- * GST_APPLE_CORE_VIDEO_NO_PLANE:
- *
- * Indicates a non-planar pixel buffer.
- */
-#define GST_APPLE_CORE_VIDEO_NO_PLANE ((size_t)-1)
-
-/**
  * GstAppleCoreVideoMemory:
  *
  * Represents a video plane or an entire (non-planar) video image,
@@ -80,11 +74,20 @@ typedef struct
  */
 typedef struct
 {
-  GstMemory mem;
+  GstGLMemory gl_mem;
 
   GstAppleCoreVideoPixelBuffer *gpixbuf;
-  size_t plane;
 } GstAppleCoreVideoMemory;
+
+typedef struct _GstAppleCoreVideoMemoryAllocator
+{
+  GstGLMemoryAllocator allocator;
+} GstAppleCoreVideoMemoryAllocator;
+
+typedef struct _GstAppleCoreVideoMemoryAllocatorClass
+{
+  GstGLMemoryAllocatorClass parent_class;
+} GstAppleCoreVideoMemoryAllocatorClass;
 
 void
 gst_apple_core_video_memory_init (void);
@@ -101,8 +104,15 @@ gst_apple_core_video_pixel_buffer_unref (GstAppleCoreVideoPixelBuffer * shared);
 gboolean
 gst_is_apple_core_video_memory (GstMemory * mem);
 
-GstMemory *
-gst_apple_core_video_memory_new_wrapped (GstAppleCoreVideoPixelBuffer * shared, gsize plane, gsize size);
+GstAppleCoreVideoMemory *
+gst_apple_core_video_memory_new_wrapped (GstGLContext *context,
+    GstAppleCoreVideoPixelBuffer * gpixbuf,
+    guint tex_id,
+    GstGLTextureTarget target,
+    GstVideoGLTextureType tex_type,
+    GstVideoInfo * info,
+    guint plane,
+    GstVideoAlignment * valign, gpointer user_data, GDestroyNotify notify);
 
 G_END_DECLS
 

@@ -310,12 +310,7 @@ gst_vtdec_negotiate (GstVideoDecoder * decoder)
     }
   }
 
-  if (vtdec->texture_cache != NULL && !output_textures) {
-    gst_video_texture_cache_free (vtdec->texture_cache);
-    vtdec->texture_cache = NULL;
-  }
-
-  if (err == noErr && output_textures) {
+  if (err == noErr) {
     /* call this regardless of whether caps have changed or not since a new
      * local context could have become available
      */
@@ -773,7 +768,9 @@ gst_vtdec_session_output_callback (void *decompression_output_ref_con,
       GST_WARNING_OBJECT (vtdec, "Output state not configured, release buffer");
       frame->flags &= VTDEC_FRAME_FLAG_SKIP;
     } else {
-      buf = gst_core_video_buffer_new (image_buffer, &state->info);
+      buf =
+          gst_core_video_buffer_new (image_buffer, &state->info,
+          vtdec->texture_cache);
       gst_video_codec_state_unref (state);
       GST_BUFFER_PTS (buf) = pts.value;
       GST_BUFFER_DURATION (buf) = duration.value;
@@ -817,13 +814,6 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
   while ((g_async_queue_length (vtdec->reorder_queue) >=
           vtdec->reorder_queue_length) || drain || flush) {
     frame = (GstVideoCodecFrame *) g_async_queue_try_pop (vtdec->reorder_queue);
-    if (frame && frame->output_buffer && vtdec->texture_cache != NULL) {
-      frame->output_buffer =
-          gst_video_texture_cache_get_gl_buffer (vtdec->texture_cache,
-          frame->output_buffer);
-      if (!frame->output_buffer)
-        GST_ERROR_OBJECT (vtdec, "couldn't get textures from buffer");
-    }
 
     /* we need to check this in case reorder_queue_length=0 (jpeg for
      * example) or we're draining/flushing

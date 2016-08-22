@@ -29,6 +29,8 @@
 #include <gst/gst.h>
 #include <gst/base/base.h>
 #include <gst/audio/audio.h>
+#include "videotexturecache.h"
+#include "glcontexthelper.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AVFoundation/AVAssetReader.h>
 #import <AVFoundation/AVAssetReaderOutput.h>
@@ -98,7 +100,9 @@ typedef enum
 - (bool) hasMediaType: (GstAVFAssetReaderMediaType) type;
 - (GstCaps *) getCaps: (GstAVFAssetReaderMediaType) type;
 - (bool) selectTrack: (GstAVFAssetReaderMediaType) type : (gint) index;
-- (GstBuffer *) nextBuffer:  (GstAVFAssetReaderMediaType) type : (GError **) error;
+- (GstBuffer *) nextBuffer:(GstAVFAssetReaderMediaType) type
+          withTextureCache:(GstVideoTextureCache *)cache
+                     error: (GError **) error;
 @end
 
 struct _GstAVFAssetSrc
@@ -111,6 +115,8 @@ struct _GstAVFAssetSrc
   gint selected_audio_track;
 
   GstAVFAssetReader *reader;
+  GstGLContextHelper *ctxh;
+  GstVideoTextureCache *texture_cache;
   GstAVFAssetSrcState state;
   GMutex lock;
   GstEvent *seek_event;

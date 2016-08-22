@@ -240,7 +240,7 @@ gst_video_info_init_from_pixel_buffer (GstVideoInfo * info,
 
 GstBuffer *
 gst_core_media_buffer_new (CMSampleBufferRef sample_buf,
-    gboolean use_video_meta)
+    gboolean use_video_meta, GstVideoTextureCache * cache)
 {
   CVImageBufferRef image_buf;
   CMBlockBufferRef block_buf;
@@ -253,7 +253,8 @@ gst_core_media_buffer_new (CMSampleBufferRef sample_buf,
 
   gst_core_media_meta_add (buf, sample_buf, image_buf, block_buf);
 
-  if (image_buf != NULL && CFGetTypeID (image_buf) == CVPixelBufferGetTypeID ()) {
+  if (image_buf != NULL && CFGetTypeID (image_buf) == CVPixelBufferGetTypeID ()
+      && cache) {
     GstVideoInfo info;
     gboolean has_padding = FALSE;
     CVPixelBufferRef pixel_buf = (CVPixelBufferRef) image_buf;
@@ -262,7 +263,8 @@ gst_core_media_buffer_new (CMSampleBufferRef sample_buf,
       goto error;
     }
 
-    gst_core_video_wrap_pixel_buffer (buf, &info, pixel_buf, &has_padding);
+    gst_core_video_wrap_pixel_buffer (buf, &info, pixel_buf, cache,
+        &has_padding);
 
     /* If the video meta API is not supported, remove padding by
      * copying the core media buffer to a system memory buffer */

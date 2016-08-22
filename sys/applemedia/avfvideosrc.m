@@ -954,18 +954,12 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     }
   }
 
-  *buf = gst_core_media_buffer_new (sbuf, useVideoMeta);
+  *buf = gst_core_media_buffer_new (sbuf, useVideoMeta, textureCache);
   if (*buf == NULL) {
     CFRelease (sbuf);
     return GST_FLOW_ERROR;
   }
   CFRelease (sbuf);
-
-  if (textureCache != NULL) {
-    *buf = gst_video_texture_cache_get_gl_buffer (textureCache, *buf);
-    if (*buf == NULL)
-      return GST_FLOW_ERROR;
-  }
 
   GST_BUFFER_OFFSET (*buf) = offset++;
   GST_BUFFER_OFFSET_END (*buf) = GST_BUFFER_OFFSET (*buf) + 1;
@@ -996,7 +990,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 - (BOOL)decideAllocation:(GstQuery *)query
 {
   GstCaps *alloc_caps;
-  GstCapsFeatures *features;
   gboolean ret;
 
   ret = GST_BASE_SRC_CLASS (parent_class)->decide_allocation (baseSrc, query);
@@ -1004,18 +997,15 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     return ret;
 
   gst_query_parse_allocation (query, &alloc_caps, NULL);
-  features = gst_caps_get_features (alloc_caps, 0);
-  if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
-    gst_gl_context_helper_ensure_context (ctxh);
-    GST_INFO_OBJECT (element, "pushing textures, context %p old context %p",
-        ctxh->context, textureCache ? textureCache->ctx : NULL);
-    if (textureCache && textureCache->ctx != ctxh->context) {
-      gst_video_texture_cache_free (textureCache);
-      textureCache = NULL;
-    }
-    textureCache = gst_video_texture_cache_new (ctxh->context);
-    gst_video_texture_cache_set_format (textureCache, format, alloc_caps);
+  gst_gl_context_helper_ensure_context (ctxh);
+  GST_INFO_OBJECT (element, "pushing textures, context %p old context %p",
+      ctxh->context, textureCache ? textureCache->ctx : NULL);
+  if (textureCache && textureCache->ctx != ctxh->context) {
+    gst_video_texture_cache_free (textureCache);
+    textureCache = NULL;
   }
+  textureCache = gst_video_texture_cache_new (ctxh->context);
+  gst_video_texture_cache_set_format (textureCache, format, alloc_caps);
 
   return TRUE;
 }

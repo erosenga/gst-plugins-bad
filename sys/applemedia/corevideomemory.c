@@ -220,14 +220,14 @@ gst_apple_core_video_pixel_buffer_unlock (GstAppleCoreVideoPixelBuffer *
 
 struct _GstAppleCoreVideoAllocatorClass
 {
-  GstAllocatorClass parent_class;
+  GstGLMemoryAllocatorClass parent_class;
 };
 
 typedef struct _GstAppleCoreVideoAllocatorClass GstAppleCoreVideoAllocatorClass;
 
 struct _GstAppleCoreVideoAllocator
 {
-  GstAllocator parent_instance;
+  GstGLMemoryAllocator parent_instance;
 };
 
 typedef struct _GstAppleCoreVideoAllocator GstAppleCoreVideoAllocator;
@@ -242,7 +242,7 @@ GType gst_apple_core_video_allocator_get_type (void);
 #define GST_APPLE_CORE_VIDEO_ALLOCATOR_CLASS(klass)     (G_TYPE_CHECK_CLASS_CAST ((klass), GST_TYPE_APPLE_CORE_VIDEO_ALLOCATOR, GstAppleCoreVideoAllocatorClass))
 
 G_DEFINE_TYPE (GstAppleCoreVideoAllocator, gst_apple_core_video_allocator,
-    GST_TYPE_ALLOCATOR);
+    GST_TYPE_GL_MEMORY_ALLOCATOR);
 
 /* Name for allocator registration */
 #define GST_APPLE_CORE_VIDEO_ALLOCATOR_NAME "AppleCoreVideoMemory"
@@ -294,77 +294,62 @@ gst_is_apple_core_video_memory (GstMemory * mem)
   return GST_IS_APPLE_CORE_VIDEO_ALLOCATOR (mem->allocator);
 }
 
-/**
- * gst_apple_core_video_memory_new:
- *
- * Helper function for gst_apple_core_video_mem_share().
- * Users should call gst_apple_core_video_memory_new_wrapped() instead.
- */
-static GstMemory *
-gst_apple_core_video_memory_new (GstMemoryFlags flags, GstMemory * parent,
-    GstAppleCoreVideoPixelBuffer * gpixbuf, gsize plane, gsize maxsize,
-    gsize align, gsize offset, gsize size)
+GstAppleCoreVideoMemory *
+gst_apple_core_video_memory_new_wrapped (GstGLContext * context,
+    GstAppleCoreVideoPixelBuffer * gpixbuf,
+    guint tex_id,
+    GstGLTextureTarget target,
+    GstVideoGLTextureType tex_type,
+    GstVideoInfo * info,
+    guint plane,
+    GstVideoAlignment * valign, gpointer user_data, GDestroyNotify notify)
 {
   GstAppleCoreVideoMemory *mem;
 
-  g_return_val_if_fail (gpixbuf != NULL, NULL);
+  mem = g_new0 (GstAppleCoreVideoMemory, 1);
+  mem->gl_mem.tex_id = tex_id;
+  mem->gl_mem.texture_wrapped = TRUE;
+  gst_gl_memory_init (&mem->gl_mem,
+      GST_ALLOCATOR_CAST (_apple_core_video_allocator), NULL, context,
+      target, tex_type, NULL, info, plane, valign, user_data, notify);
 
-  mem = g_slice_new0 (GstAppleCoreVideoMemory);
-  gst_memory_init (GST_MEMORY_CAST (mem), flags,
-      GST_ALLOCATOR_CAST (_apple_core_video_allocator), parent, maxsize, align,
-      offset, size);
+  /* FIXME: remove this */
+  GST_MINI_OBJECT_FLAG_SET (mem, GST_MEMORY_FLAG_READONLY);
 
   mem->gpixbuf = gst_apple_core_video_pixel_buffer_ref (gpixbuf);
-  mem->plane = plane;
 
-  GST_DEBUG ("%p: gpixbuf %p, plane: %" G_GSSIZE_FORMAT ", size %"
-      G_GSIZE_FORMAT, mem, mem->gpixbuf, mem->plane, mem->mem.size);
-
-  return (GstMemory *) mem;
-}
-
-/**
- * gst_apple_core_video_memory_new_wrapped:
- * @gpixbuf: the backing #GstAppleCoreVideoPixelBuffer
- * @plane: the plane this memory will represent, or #GST_APPLE_CORE_VIDEO_NO_PLANE for non-planar buffer
- * @size: the size of the buffer or specific plane
- *
- * Returns: a newly allocated #GstAppleCoreVideoMemory
- */
-GstMemory *
-gst_apple_core_video_memory_new_wrapped (GstAppleCoreVideoPixelBuffer * gpixbuf,
-    gsize plane, gsize size)
-{
-  return gst_apple_core_video_memory_new (0, NULL, gpixbuf, plane, size, 0, 0,
-      size);
+  return mem;
 }
 
 static gpointer
-gst_apple_core_video_mem_map (GstMemory * gmem, gsize maxsize,
-    GstMapFlags flags)
+gst_apple_core_video_allocator_map (GstGLBaseMemory * bmem,
+    GstMapInfo * info, gsize size)
 {
-  GstAppleCoreVideoMemory *mem = (GstAppleCoreVideoMemory *) gmem;
+  GstAppleCoreVideoMemory *mem = (GstAppleCoreVideoMemory *) bmem;
+  GstGLMemory *gl_mem = (GstGLMemory *) bmem;
   gpointer ret;
 
-  if (!gst_apple_core_video_pixel_buffer_lock (mem->gpixbuf, flags))
+  if (info->flags & GST_MAP_GL)
+    return &gl_mem->tex_id;
+
+  if (!gst_apple_core_video_pixel_buffer_lock (mem->gpixbuf, info->flags))
     return NULL;
 
-  if (mem->plane != GST_APPLE_CORE_VIDEO_NO_PLANE) {
-    ret = CVPixelBufferGetBaseAddressOfPlane (mem->gpixbuf->buf, mem->plane);
+  if (CVPixelBufferIsPlanar (mem->gpixbuf->buf)) {
+    ret = CVPixelBufferGetBaseAddressOfPlane (mem->gpixbuf->buf, gl_mem->plane);
 
     if (ret != NULL)
-      GST_DEBUG ("%p: pixbuf %p plane %" G_GSIZE_FORMAT
-          " flags %08x: mapped %p", mem, mem->gpixbuf->buf, mem->plane, flags,
-          ret);
+      GST_DEBUG ("%p: pixbuf %p plane %d flags %08x: mapped %p",
+          mem, mem->gpixbuf->buf, gl_mem->plane, info->flags, ret);
     else
-      GST_ERROR ("%p: invalid plane base address (NULL) for pixbuf %p plane %"
-          G_GSIZE_FORMAT, mem, mem->gpixbuf->buf, mem->plane);
+      GST_ERROR ("%p: invalid plane base address (NULL) for pixbuf %p plane %d",
+          mem, mem->gpixbuf->buf, gl_mem->plane);
   } else {
     ret = CVPixelBufferGetBaseAddress (mem->gpixbuf->buf);
 
     if (ret != NULL)
       GST_DEBUG ("%p: pixbuf %p flags %08x: mapped %p", mem, mem->gpixbuf->buf,
-          flags, ret);
+          info->flags, ret);
     else
       GST_ERROR ("%p: invalid base address (NULL) for pixbuf %p"
           G_GSIZE_FORMAT, mem, mem->gpixbuf->buf);
@@ -374,80 +359,52 @@ gst_apple_core_video_mem_map (GstMemory * gmem, gsize maxsize,
 }
 
 static void
-gst_apple_core_video_mem_unmap (GstMemory * gmem)
+gst_apple_core_video_allocator_unmap (GstGLBaseMemory * bmem, GstMapInfo * info)
 {
-  GstAppleCoreVideoMemory *mem = (GstAppleCoreVideoMemory *) gmem;
-  (void) gst_apple_core_video_pixel_buffer_unlock (mem->gpixbuf);
-  if (mem->plane != GST_APPLE_CORE_VIDEO_NO_PLANE)
-    GST_DEBUG ("%p: pixbuf %p plane %" G_GSIZE_FORMAT, mem,
-        mem->gpixbuf->buf, mem->plane);
-  else
-    GST_DEBUG ("%p: pixbuf %p", mem, mem->gpixbuf->buf);
+  GstAppleCoreVideoMemory *mem = (GstAppleCoreVideoMemory *) bmem;
+  GstGLMemory *gl_mem = (GstGLMemory *) bmem;
+  if (!(info->flags & GST_MAP_GL)) {
+    gst_apple_core_video_pixel_buffer_unlock (mem->gpixbuf);
+    if (CVPixelBufferIsPlanar (mem->gpixbuf->buf))
+      GST_DEBUG ("%p: pixbuf %p plane %d", mem,
+          mem->gpixbuf->buf, gl_mem->plane);
+    else
+      GST_DEBUG ("%p: pixbuf %p", mem, mem->gpixbuf->buf);
+  }
 }
 
 static GstMemory *
-gst_apple_core_video_mem_share (GstMemory * gmem, gssize offset, gssize size)
+gst_apple_core_video_mem_alloc (GstAllocator * allocator, gsize size,
+    GstAllocationParams * params)
 {
-  GstAppleCoreVideoMemory *mem;
-  GstMemory *parent, *sub;
+  g_warning ("use gst_apple_core_video_memory_wrapped () to allocate from this "
+      "AppleCoreVideo allocator");
 
-  mem = (GstAppleCoreVideoMemory *) gmem;
-
-  /* find the real parent */
-  parent = gmem->parent;
-  if (parent == NULL)
-    parent = gmem;
-
-  if (size == -1)
-    size = gmem->size - offset;
-
-  /* the shared memory is always readonly */
-  sub =
-      gst_apple_core_video_memory_new (GST_MINI_OBJECT_FLAGS (parent) |
-      GST_MINI_OBJECT_FLAG_LOCK_READONLY, parent, mem->gpixbuf, mem->plane,
-      gmem->maxsize, gmem->align, gmem->offset + offset, size);
-
-  return sub;
-}
-
-static gboolean
-gst_apple_core_video_mem_is_span (GstMemory * mem1, GstMemory * mem2,
-    gsize * offset)
-{
-  /* We may only return FALSE since:
-   * 1) Core Video gives no guarantees about planes being consecutive.
-   *    We may only know this after mapping.
-   * 2) GstAppleCoreVideoMemory instances for planes do not share a common
-   *    parent -- i.e. they're not offsets into the same parent
-   *    memory instance.
-   *
-   * It's not unlikely that planes will be stored in consecutive memory
-   * but it should be checked by the user after mapping.
-   */
-  return FALSE;
+  return NULL;
 }
 
 static void
-gst_apple_core_video_mem_free (GstAllocator * allocator, GstMemory * gmem)
+gst_apple_core_video_mem_destroy (GstGLBaseMemory * bmem)
 {
-  GstAppleCoreVideoMemory *mem = (GstAppleCoreVideoMemory *) gmem;
+  GstAppleCoreVideoMemory *mem = (GstAppleCoreVideoMemory *) bmem;
 
   gst_apple_core_video_pixel_buffer_unref (mem->gpixbuf);
-
-  g_slice_free (GstAppleCoreVideoMemory, mem);
+  GST_GL_BASE_MEMORY_ALLOCATOR_CLASS
+      (gst_apple_core_video_allocator_parent_class)->destroy (bmem);
 }
 
 static void
 gst_apple_core_video_allocator_class_init (GstAppleCoreVideoAllocatorClass *
     klass)
 {
-  GstAllocatorClass *allocator_class;
+  GstAllocatorClass *allocator_class = (GstAllocatorClass *) klass;
+  GstGLBaseMemoryAllocatorClass *gl_base_allocator_class =
+      (GstGLBaseMemoryAllocatorClass *) klass;
 
-  allocator_class = (GstAllocatorClass *) klass;
-
-  /* we don't do allocations, only wrap existing pixel buffers */
-  allocator_class->alloc = NULL;
-  allocator_class->free = gst_apple_core_video_mem_free;
+  allocator_class->alloc = gst_apple_core_video_mem_alloc;
+  gl_base_allocator_class->destroy = gst_apple_core_video_mem_destroy;
+  gl_base_allocator_class->map = gst_apple_core_video_allocator_map;
+  gl_base_allocator_class->unmap = gst_apple_core_video_allocator_unmap;
 }
 
 static void
@@ -456,10 +413,6 @@ gst_apple_core_video_allocator_init (GstAppleCoreVideoAllocator * allocator)
   GstAllocator *alloc = GST_ALLOCATOR_CAST (allocator);
 
   alloc->mem_type = GST_APPLE_CORE_VIDEO_ALLOCATOR_NAME;
-  alloc->mem_map = gst_apple_core_video_mem_map;
-  alloc->mem_unmap = gst_apple_core_video_mem_unmap;
-  alloc->mem_share = gst_apple_core_video_mem_share;
-  alloc->mem_is_span = gst_apple_core_video_mem_is_span;
 
   GST_OBJECT_FLAG_SET (allocator, GST_ALLOCATOR_FLAG_CUSTOM_ALLOC);
 }

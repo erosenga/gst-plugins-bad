@@ -169,7 +169,6 @@ gst_avf_asset_src_class_init (GstAVFAssetSrcClass * klass)
           GST_PARAM_MUTABLE_READY));
 
   gstelement_class->change_state = gst_avf_asset_src_change_state;
-
 }
 
 static void
@@ -246,6 +245,8 @@ gst_avf_asset_src_change_state (GstElement * element, GstStateChange transition)
   switch (transition) {
     case GST_STATE_CHANGE_NULL_TO_READY: {
       self->state = GST_AVF_ASSET_SRC_STATE_STOPPED;
+      self->ctxh = gst_gl_context_helper_new (GST_ELEMENT (self));
+      self->texture_cache = NULL;
       self->reader = [[GstAVFAssetReader alloc] initWithURI:self->uri:&error];
       if (error) {
         GST_ELEMENT_ERROR (element, RESOURCE, FAILED, ("AVFAssetReader error"),
@@ -274,6 +275,8 @@ gst_avf_asset_src_change_state (GstElement * element, GstStateChange transition)
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       gst_avf_asset_src_stop_reading (self);
       gst_avf_asset_src_stop (self);
+      gst_gl_context_helper_free (self->ctxh);
+      self->ctxh = NULL;
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       [self->reader release];
@@ -503,7 +506,9 @@ gst_avf_asset_src_read_data (GstAVFAssetSrc *self, GstPad *pad,
     goto exit;
   }
 
-  buf = [self->reader nextBuffer:type:&error];
+  buf = [self->reader nextBuffer:type
+                withTextureCache:self->texture_cache
+                           error:&error];
   GST_AVF_ASSET_SRC_UNLOCK (self);
 
   if (buf == NULL) {
@@ -645,6 +650,8 @@ gst_avf_asset_src_start (GstAVFAssetSrc *self)
     gst_element_add_pad (GST_ELEMENT (self), self->audiopad);
   }
   if (AVF_ASSET_READER_HAS_VIDEO (self)) {
+    GstCaps *caps;
+
     self->videopad = gst_pad_new_from_static_template (&video_factory, "video");
     gst_pad_set_query_function (self->videopad,
         gst_avf_asset_src_query);
@@ -653,12 +660,17 @@ gst_avf_asset_src_start (GstAVFAssetSrc *self)
     gst_pad_use_fixed_caps (self->videopad);
     gst_pad_set_active (self->videopad, TRUE);
     gst_avf_asset_src_send_start_stream (self, self->videopad);
-    gst_pad_set_caps (self->videopad,
-        [self->reader getCaps: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO]);
-    gst_pad_push_event (self->videopad, gst_event_new_caps (
-        [self->reader getCaps: GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO]));
+    caps = [self->reader getCaps:GST_AVF_ASSET_READER_MEDIA_TYPE_VIDEO];
+    gst_pad_set_caps (self->videopad, caps);
+    gst_pad_push_event (self->videopad, gst_event_new_caps (caps));
     gst_pad_push_event (self->videopad, gst_event_new_segment (&segment));
     gst_element_add_pad (GST_ELEMENT (self), self->videopad);
+    gst_gl_context_helper_ensure_context (self->ctxh);
+    if (self->texture_cache && self->texture_cache->ctx != self->ctxh->context)
+      gst_video_texture_cache_free (self->texture_cache);
+    self->texture_cache = gst_video_texture_cache_new (self->ctxh->context);
+    gst_video_texture_cache_set_format (self->texture_cache, GST_VIDEO_FORMAT_NV12, caps);
+    gst_caps_unref (caps);
   }
   gst_element_no_more_pads (GST_ELEMENT (self));
 
@@ -692,6 +704,9 @@ gst_avf_asset_src_stop (GstAVFAssetSrc *self)
     gst_pad_stop_task (self->videopad);
     gst_element_remove_pad (GST_ELEMENT (self), self->videopad);
   }
+  if (self->texture_cache)
+    gst_video_texture_cache_free (self->texture_cache);
+  self->texture_cache = NULL;
 
   self->state = GST_AVF_ASSET_SRC_STATE_STOPPED;
 
@@ -1038,7 +1053,9 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
   [self start: error];
 }
 
-- (GstBuffer *) nextBuffer: (GstAVFAssetReaderMediaType) type : (GError **) error
+- (GstBuffer *) nextBuffer: (GstAVFAssetReaderMediaType) type
+                withTextureCache: (GstVideoTextureCache *)texture_cache
+                error: (GError **) error
 {
   CMSampleBufferRef cmbuf;
   AVAssetReaderTrackOutput *areader = NULL;
@@ -1071,7 +1088,7 @@ gst_avf_asset_src_uri_handler_init (gpointer g_iface, gpointer iface_data)
     return NULL;
   }
 
-  buf = gst_core_media_buffer_new (cmbuf, FALSE);
+  buf = gst_core_media_buffer_new (cmbuf, FALSE, texture_cache);
   CFRelease (cmbuf);
   if (buf == NULL)
     return NULL;
